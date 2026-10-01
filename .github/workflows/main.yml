@@ -57,29 +57,29 @@ jobs:
       # ============================================================
       # 3. Assume Cluster Admin Role
       # ============================================================
-      - name: Assume Cluster Admin Role
-        run: |
-          set -e
-
-          aws sts assume-role \
-            --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
-            --role-session-name "github-actions-${GITHUB_RUN_ID}" \
-            > /tmp/cluster-admin-role.json
-
-          CREDS=$(cat /tmp/cluster-admin-role.json)
-
-          export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.Credentials.AccessKeyId')
-          export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.Credentials.SecretAccessKey')
-          export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Credentials.SessionToken')
-
-          echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
-          echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> "$GITHUB_ENV"
-
-          echo "Successfully assumed Cluster Admin Role."
-
-          echo "AWS identity after assuming Cluster Admin Role:"
-          aws sts get-caller-identity
+      #- name: Assume Cluster Admin Role
+      #  run: |
+      #    set -e
+#
+      #    aws sts assume-role \
+      #      --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
+      #      --role-session-name "github-actions-${GITHUB_RUN_ID}" \
+      #      > /tmp/cluster-admin-role.json
+#
+      #    CREDS=$(cat /tmp/cluster-admin-role.json)
+#
+      #    export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.Credentials.AccessKeyId')
+      #    export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.Credentials.SecretAccessKey')
+      #    export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Credentials.SessionToken')
+#
+      #    echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+      #    echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+      #    echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> "$GITHUB_ENV"
+#
+      #    echo "Successfully assumed Cluster Admin Role."
+#
+      #    echo "AWS identity after assuming Cluster Admin Role:"
+      #    aws sts get-caller-identity
 
 
       # ============================================================
@@ -317,7 +317,7 @@ jobs:
 
 
       # ============================================================
-      # 17. Verify Prod Argo CD
+      # 17. Verify Prod Argo CD.
       # ============================================================
       - name: Verify Prod Argo CD
         run: |
