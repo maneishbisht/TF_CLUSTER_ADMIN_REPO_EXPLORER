@@ -1,0 +1,337 @@
+name: Terraform Apply & Configure Argo CD
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+
+  DEV_CLUSTER_NAME: dev_cluster
+  TEST_CLUSTER_NAME: test_cluster
+  PROD_CLUSTER_NAME: prod_cluster
+
+  KUBECONFIG: ${{ github.workspace }}/kubeconfig
+
+jobs:
+  terraform-and-argocd:
+    name: Terraform + Argo CD Configuration
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      CLUSTER_ADMIN_ROLE_ARN: ${{ secrets.CLUSTER_ADMIN_ROLE_ARN }}
+
+      FRONTEND_REPO: ${{ secrets.REPO_EXPLORER_FRONTEND_CONFIG }}
+      BACKEND_REPO: ${{ secrets.REPO_EXPLORER_BACKEND_CONFIG }}
+
+      CONFIG_REPO_PAT: ${{ secrets.CONFIG_REPO_PAT }}
+
+    steps:
+
+      # ============================================================
+      # 1. Checkout Terraform repository
+      # ============================================================
+      - name: Checkout Terraform Repository
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # 2. Verify initial AWS identity
+      # ============================================================
+      - name: Verify AWS Identity
+        run: |
+          set -e
+
+          echo "Current AWS identity:"
+          aws sts get-caller-identity
+
+
+      # ============================================================
+      # 3. Assume Cluster Admin Role
+      # ============================================================
+      - name: Assume Cluster Admin Role
+        run: |
+          set -e
+
+          aws sts assume-role \
+            --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
+            --role-session-name "github-actions-${GITHUB_RUN_ID}" \
+            > /tmp/cluster-admin-role.json
+
+          CREDS=$(cat /tmp/cluster-admin-role.json)
+
+          export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.Credentials.AccessKeyId')
+          export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.Credentials.SecretAccessKey')
+          export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Credentials.SessionToken')
+
+          echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> "$GITHUB_ENV"
+
+          echo "Successfully assumed Cluster Admin Role."
+
+          echo "AWS identity after assuming Cluster Admin Role:"
+          aws sts get-caller-identity
+
+
+      # ============================================================
+      # 4. Setup Terraform
+      # ============================================================
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.0
+
+
+      # ============================================================
+      # 5. Terraform Init
+      # ============================================================
+      - name: Terraform Init
+        run: |
+          terraform init
+
+
+      # ============================================================
+      # 6. Terraform Validate
+      # ============================================================
+      - name: Terraform Validate
+        run: |
+          terraform validate
+
+
+      # ============================================================
+      # 7. Terraform Apply
+      #
+      # This creates/updates:
+      #
+      # Argo CD may temporarily report errors here because:
+      #
+      #   - test_cluster is not registered yet
+      #   - config repositories are not registered yet
+      #
+      # The following steps immediately configure them.
+      # ============================================================
+      - name: Terraform Apply
+        run: |
+          terraform apply \
+            -auto-approve
+
+
+      # ============================================================
+      # 8. Install Argo CD CLI
+      # ============================================================
+      - name: Install Argo CD CLI
+        run: |
+          set -e
+
+          VERSION=$(curl -L -s \
+            https://api.github.com/repos/argoproj/argo-cd/releases/latest \
+            | jq -r '.tag_name')
+
+          curl -L -sS \
+            -o /tmp/argocd \
+            "https://github.com/argoproj/argo-cd/releases/download/${VERSION}/argocd-linux-amd64"
+
+          sudo install -m 555 /tmp/argocd /usr/local/bin/argocd
+
+          argocd version --client
+
+
+      # ============================================================
+      # 9. Create/Update kubeconfig
+      #
+      # Creates contexts for:
+      #
+      #   dev_cluster
+      #   test_cluster
+      #   prod_cluster
+      #
+      # Authentication uses Cluster Admin IAM role.
+      # ============================================================
+      - name: Create or Update EKS Kubeconfig
+        run: |
+          set -e
+
+          rm -f "$KUBECONFIG"
+
+          echo "Creating kubeconfig for dev_cluster..."
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$DEV_CLUSTER_NAME" \
+            --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
+            --alias "$DEV_CLUSTER_NAME" \
+            --kubeconfig "$KUBECONFIG"
+
+          echo "Creating kubeconfig for test_cluster..."
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$TEST_CLUSTER_NAME" \
+            --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
+            --alias "$TEST_CLUSTER_NAME" \
+            --kubeconfig "$KUBECONFIG"
+
+          echo "Creating kubeconfig for prod_cluster..."
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$PROD_CLUSTER_NAME" \
+            --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
+            --alias "$PROD_CLUSTER_NAME" \
+            --kubeconfig "$KUBECONFIG"
+
+          echo ""
+          echo "Available Kubernetes contexts:"
+          kubectl config get-contexts
+
+
+      # ============================================================
+      # 10. Verify access to all EKS clusters
+      # ============================================================
+      - name: Verify EKS Cluster Access
+        run: |
+          set -e
+
+          echo "Testing dev_cluster..."
+          kubectl --context "$DEV_CLUSTER_NAME" get nodes
+
+          echo "Testing test_cluster..."
+          kubectl --context "$TEST_CLUSTER_NAME" get nodes
+
+          echo "Testing prod_cluster..."
+          kubectl --context "$PROD_CLUSTER_NAME" get nodes
+
+
+      # ============================================================
+      # 11. Register test_cluster with Dev Argo CD and text_cluster context is being added
+      # ============================================================
+      - name: Register test_cluster in Dev Argo CD
+        run: |
+          set -e
+
+          echo "Registering test_cluster with Dev Argo CD..."
+
+          argocd cluster add "$TEST_CLUSTER_NAME" \
+            --core \
+            --kube-context "$DEV_CLUSTER_NAME" \
+            --upsert \
+            --yes
+
+
+      # ============================================================
+      # 12. Add Frontend Config Repository to Dev Argo CD
+      # ============================================================
+      - name: Add Frontend Repository to Dev Argo CD
+        run: |
+          set -e
+
+          echo "Adding frontend repository to Dev Argo CD..."
+
+          argocd repo add "$FRONTEND_REPO" \
+            --core \
+            --kube-context "$DEV_CLUSTER_NAME" \
+            --username "x-access-token" \
+            --password "$CONFIG_REPO_PAT" \
+            --upsert
+
+
+      # ============================================================
+      # 13. Add Backend Config Repository to Dev Argo CD
+      # ============================================================
+      - name: Add Backend Repository to Dev Argo CD
+        run: |
+          set -e
+
+          echo "Adding backend repository to Dev Argo CD..."
+
+          argocd repo add "$BACKEND_REPO" \
+            --core \
+            --kube-context "$DEV_CLUSTER_NAME" \
+            --username "x-access-token" \
+            --password "$CONFIG_REPO_PAT" \
+            --upsert
+
+
+      # ============================================================
+      # 14. Add Frontend Config Repository to Prod Argo CD
+      # ============================================================
+      - name: Add Frontend Repository to Prod Argo CD
+        run: |
+          set -e
+
+          echo "Adding frontend repository to Prod Argo CD..."
+
+          argocd repo add "$FRONTEND_REPO" \
+            --core \
+            --kube-context "$PROD_CLUSTER_NAME" \
+            --username "x-access-token" \
+            --password "$CONFIG_REPO_PAT" \
+            --upsert
+
+
+      # ============================================================
+      # 15. Add Backend Config Repository to Prod Argo CD
+      # ============================================================
+      - name: Add Backend Repository to Prod Argo CD
+        run: |
+          set -e
+
+          echo "Adding backend repository to Prod Argo CD..."
+
+          argocd repo add "$BACKEND_REPO" \
+            --core \
+            --kube-context "$PROD_CLUSTER_NAME" \
+            --username "x-access-token" \
+            --password "$CONFIG_REPO_PAT" \
+            --upsert
+
+
+      # ============================================================
+      # 16. Verify Dev Argo CD
+      # ============================================================
+      - name: Verify Dev Argo CD
+        run: |
+          set -e
+
+          echo "===== Dev Argo CD Clusters ====="
+
+          argocd cluster list \
+            --core \
+            --kube-context "$DEV_CLUSTER_NAME"
+
+          echo ""
+          echo "===== Dev Argo CD Repositories ====="
+
+          argocd repo list \
+            --core \
+            --kube-context "$DEV_CLUSTER_NAME"
+
+
+      # ============================================================
+      # 17. Verify Prod Argo CD
+      # ============================================================
+      - name: Verify Prod Argo CD
+        run: |
+          set -e
+
+          echo "===== Prod Argo CD Clusters ====="
+
+          argocd cluster list \
+            --core \
+            --kube-context "$PROD_CLUSTER_NAME"
+
+          echo ""
+          echo "===== Prod Argo CD Repositories ====="
+
+          argocd repo list \
+            --core \
+            --kube-context "$PROD_CLUSTER_NAME"
