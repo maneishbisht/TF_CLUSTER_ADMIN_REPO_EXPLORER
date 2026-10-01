@@ -43,29 +43,22 @@ resource "helm_release" "argocd" {
 
   repository = "https://argoproj.github.io/argo-helm"
   chart      = "argo-cd"
+  version = "9.1.0"
 
-  # Set the desired Argo CD chart version here.
-  # Example:
-  # version = "9.1.0"
+  timeout         = 900
+  wait            = true
+  cleanup_on_fail = true
 
   values = [
     yamlencode({
       configs = {
         params = {
-          # Run Argo CD in core mode.
           "server.insecure" = true
         }
-      }
-
-      server = {
-        extraArgs = [
-          "--core"
-        ]
       }
     })
   ]
 }
-
 # =============================================================================
 # 2. Controller ApplicationSet
 # =============================================================================
