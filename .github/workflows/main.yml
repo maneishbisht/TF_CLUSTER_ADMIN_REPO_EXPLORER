@@ -119,8 +119,22 @@ jobs:
       #
       # The following steps immediately configure them.
       # ============================================================
-      - name: Terraform Apply
+      - name: Install Argo CD
         run: |
+          set -e
+      
+          terraform apply \
+            -target=module.dev.helm_release.argocd[0] \
+            -target=module.prod.helm_release.argocd[0] \
+            -auto-approve
+      
+      - name: Wait for CRDs to Register
+        run: sleep 30
+      
+      - name: Terraform Apply Remaining Resources
+        run: |
+          set -e
+      
           terraform apply \
             -auto-approve
 

@@ -85,6 +85,8 @@ resource "helm_release" "argocd" {
 resource "kubernetes_manifest" "controllers_applicationset" {
   count = local.create_application_sets ? 1 : 0
 
+  depends_on = [helm_release.argocd]
+
   manifest = {
     apiVersion = "argoproj.io/v1alpha1"
     kind       = "ApplicationSet"
@@ -131,7 +133,7 @@ resource "kubernetes_manifest" "controllers_applicationset" {
                     helm = {
                       releaseName = "aws-load-balancer-controller"
                       skipCrds    = false
-                      values = <<-EOT
+                      values      = <<-EOT
                         clusterName: {{.clusterName}}
                         region: ${var.aws_region}
                         serviceAccount:
@@ -183,7 +185,7 @@ resource "kubernetes_manifest" "controllers_applicationset" {
 
                     helm = {
                       releaseName = "csi-secrets-store"
-                      values = <<-EOT
+                      values      = <<-EOT
                         tokenRequests:
                           - audience: sts.amazonaws.com
                           - audience: pods.eks.amazonaws.com
@@ -197,7 +199,7 @@ resource "kubernetes_manifest" "controllers_applicationset" {
 
                     helm = {
                       releaseName = "secrets-provider-aws"
-                      values = <<-EOT
+                      values      = <<-EOT
                         secrets-store-csi-driver:
                           install: false
                       EOT
@@ -252,6 +254,8 @@ resource "kubernetes_manifest" "controllers_applicationset" {
 #
 resource "kubernetes_manifest" "repo_explorer_applicationset" {
   count = local.create_application_sets ? 1 : 0
+
+  depends_on = [helm_release.argocd]
 
   manifest = {
     apiVersion = "argoproj.io/v1alpha1"

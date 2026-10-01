@@ -70,6 +70,7 @@ module "dev" {
 
   providers = {
     kubernetes = kubernetes.dev
+    helm = helm.dev
   }
 }
 
@@ -94,6 +95,7 @@ module "test" {
 
   providers = {
     kubernetes = kubernetes.test
+    helm = helm.test
   }
 }
 
@@ -118,5 +120,6 @@ module "prod" {
 
   providers = {
     kubernetes = kubernetes.prod
+    helm = helm.prod
   }
 }
