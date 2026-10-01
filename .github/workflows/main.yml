@@ -81,84 +81,7 @@ jobs:
           echo "AWS identity after assuming Cluster Admin Role:"
           aws sts get-caller-identity
 
-
-      # ============================================================
-      # 4. Setup Terraform
-      # ============================================================
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.10.0
-
-
-      # ============================================================
-      # 5. Terraform Init
-      # ============================================================
-      - name: Terraform Init
-        run: |
-          terraform init
-  
-
-      # ============================================================
-      # 6. Terraform Validate
-      # ============================================================
-      - name: Terraform Validate
-        run: |
-          terraform validate
-
-
-      # ============================================================
-      # 7. Terraform Apply
-      #
-      # This creates/updates:
-      #
-      # Argo CD may temporarily report errors here because:
-      #
-      #   - test_cluster is not registered yet
-      #   - config repositories are not registered yet
-      #
-      # The following steps immediately configure them.
-      # ============================================================
-      - name: Install Argo CD
-        run: |
-          set -e
       
-          terraform apply \
-            -target=module.dev.helm_release.argocd[0] \
-            -target=module.prod.helm_release.argocd[0] \
-            -auto-approve
-      
-      - name: Wait for CRDs to Register
-        run: sleep 30
-      
-      - name: Terraform Apply Remaining Resources
-        run: |
-          set -e
-      
-          terraform apply \
-            -auto-approve
-
-
-      # ============================================================
-      # 8. Install Argo CD CLI
-      # ============================================================
-      - name: Install Argo CD CLI
-        run: |
-          set -e
-
-          VERSION=$(curl -L -s \
-            https://api.github.com/repos/argoproj/argo-cd/releases/latest \
-            | jq -r '.tag_name')
-
-          curl -L -sS \
-            -o /tmp/argocd \
-            "https://github.com/argoproj/argo-cd/releases/download/${VERSION}/argocd-linux-amd64"
-
-          sudo install -m 555 /tmp/argocd /usr/local/bin/argocd
-
-          argocd version --client
-
-
       # ============================================================
       # 9. Create/Update kubeconfig
       #
@@ -204,6 +127,113 @@ jobs:
           echo "Available Kubernetes contexts:"
           kubectl config get-contexts
 
+
+
+
+      # ============================================================
+      # 4. Setup Terraform
+      # ============================================================
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.0
+
+
+      # ============================================================
+      # 5. Terraform Init
+      # ============================================================
+      - name: Terraform Init
+        run: |
+          terraform init
+  
+
+      # ============================================================
+      # 6. Terraform Validate
+      # ============================================================
+      - name: Terraform Validate
+        run: |
+          terraform validate
+
+
+      # ============================================================
+      # 7. Terraform Apply
+      #
+      # This creates/updates:
+      #
+      # Argo CD may temporarily report errors here because:
+      #
+      #   - test_cluster is not registered yet
+      #   - config repositories are not registered yet
+      #
+      # The following steps immediately configure them.
+      # ============================================================
+      # ============================================================
+      # 9.5. Clean up existing unmanaged Argo CD namespaces & secrets
+      # ============================================================
+      - name: Cleanup Existing ArgoCD Releases and Namespaces
+        run: |
+          set -e
+    
+          for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
+            echo "Cleaning up ArgoCD remnants on cluster: $cluster"
+            
+            # 1. Delete Helm release tracking secrets and configmaps if they exist
+            kubectl --context "$cluster" delete secret -n argocd -l owner=helm --ignore-not-found=true
+            kubectl --context "$cluster" delete configmap -n argocd -l owner=helm --ignore-not-found=true
+            
+            # 2. Force delete the namespace if it exists
+            if kubectl --context "$cluster" get namespace argocd >/dev/null 2>&1; then
+              echo "Deleting 'argocd' namespace on $cluster..."
+              kubectl --context "$cluster" delete namespace argocd --wait=true
+            fi
+    
+            # 3. Clean up cluster-scoped ArgoCD CRDs that might block re-installation
+            echo "Checking for leftover ArgoCD CRDs on $cluster..."
+            kubectl --context "$cluster" get crd -o name | grep argoproj.io | xargs -r kubectl --context "$cluster" delete --wait=true || true
+          done
+    
+          echo "Waiting 10 seconds for cluster state to settle..."
+          sleep 10
+#===================================================================================
+
+      - name: Install Argo CD
+        run: |
+          set -e
+      
+          terraform apply \
+            -target=module.dev.helm_release.argocd[0] \
+            -target=module.prod.helm_release.argocd[0] \
+            -auto-approve
+      
+      - name: Wait for CRDs to Register
+        run: sleep 30
+      
+      - name: Terraform Apply Remaining Resources
+        run: |
+          set -e
+      
+          terraform apply \
+            -auto-approve
+
+
+      # ============================================================
+      # 8. Install Argo CD CLI
+      # ============================================================
+      - name: Install Argo CD CLI
+        run: |
+          set -e
+
+          VERSION=$(curl -L -s \
+            https://api.github.com/repos/argoproj/argo-cd/releases/latest \
+            | jq -r '.tag_name')
+
+          curl -L -sS \
+            -o /tmp/argocd \
+            "https://github.com/argoproj/argo-cd/releases/download/${VERSION}/argocd-linux-amd64"
+
+          sudo install -m 555 /tmp/argocd /usr/local/bin/argocd
+
+          argocd version --client
 
       # ============================================================
       # 10. Verify access to all EKS clusters

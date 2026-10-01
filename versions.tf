@@ -20,7 +20,7 @@
 
   backend "s3" {
     bucket = "repoexplorerstatebucket"
-    key    = "rootrepoexplorer.tfstate"
+    key    = "clusteradminrepoexplorer.tfstate"
     region = "ap-south-1"
 
     use_lockfile = true
