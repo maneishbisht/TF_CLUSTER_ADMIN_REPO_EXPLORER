@@ -23,8 +23,51 @@ locals {
   create_application_sets = length(var.target_clusters) > 0
 }
 
+
 # =============================================================================
-# 1. Controller ApplicationSet
+# Argo CD INSTALLATION
+# =============================================================================
+#
+# Install Argo CD only in clusters where target_clusters is non-empty.
+# Therefore:
+#   dev  -> Argo CD installed
+#   test -> Argo CD NOT installed
+#   prod -> Argo CD installed
+#
+resource "helm_release" "argocd" {
+  count = local.create_application_sets ? 1 : 0
+
+  name             = "argocd"
+  namespace        = "argocd"
+  create_namespace = true
+
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argo-cd"
+
+  # Set the desired Argo CD chart version here.
+  # Example:
+  # version = "9.1.0"
+
+  values = [
+    yamlencode({
+      configs = {
+        params = {
+          # Run Argo CD in core mode.
+          "server.insecure" = true
+        }
+      }
+
+      server = {
+        extraArgs = [
+          "--core"
+        ]
+      }
+    })
+  ]
+}
+
+# =============================================================================
+# 2. Controller ApplicationSet
 # =============================================================================
 #
 # For the dev Argo CD instance:
@@ -197,7 +240,7 @@ resource "kubernetes_manifest" "controllers_applicationset" {
 }
 
 # =============================================================================
-# 2. Repo-explorer ApplicationSet
+# 3. Repo-explorer ApplicationSet
 # =============================================================================
 #
 # For dev:
