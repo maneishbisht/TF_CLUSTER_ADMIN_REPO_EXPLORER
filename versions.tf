@@ -9,7 +9,7 @@
 
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.23"
+      version = "~> 2.37"
     }
 
     helm = {
