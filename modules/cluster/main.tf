@@ -27,11 +27,15 @@ resource "helm_release" "argocd" {
 
   values = [
     yamlencode({
-      configs = {
+     configs = {
+        cm = {
+          create = true
+          }
+
         params = {
-          "server.insecure" = true
+        "server.insecure" = true
         }
-      }
+              }
     })
   ]
 }
