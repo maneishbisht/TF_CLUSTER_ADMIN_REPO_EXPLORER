@@ -13,20 +13,20 @@ locals {
     }
   }
 
-  # Argo CD is installed by the first Terraform project only on dev and prod.
-  # The dev Argo CD instance manages dev + test; the prod Argo CD instance
-  # manages prod.
-  argocd_target_clusters = {
+  # Argo CD is installed only on dev and prod.
+  # The dev Argo CD instance is the control plane for both dev and test.
+  # Therefore the dev module bootstraps the application-config Helm chart
+  # twice: once with values-dev.yaml and once with values-test.yaml.
+  # The prod Argo CD instance bootstraps it once with values-prod.yaml.
+  application_repositories = {
     dev = [
       {
-        cluster_key  = "dev"
-        cluster_name = local.clusters["dev"].cluster_name
-        server       = "https://kubernetes.default.svc"
+        name        = "dev"
+        values_file = "values-dev.yaml"
       },
       {
-        cluster_key  = "test"
-        cluster_name = local.clusters["test"].cluster_name
-        server       = data.aws_eks_cluster.clusters["test"].endpoint
+        name        = "test"
+        values_file = "values-test.yaml"
       }
     ]
 
@@ -34,9 +34,8 @@ locals {
 
     prod = [
       {
-        cluster_key  = "prod"
-        cluster_name = local.clusters["prod"].cluster_name
-        server       = "https://kubernetes.default.svc"
+        name        = "prod"
+        values_file = "values-prod.yaml"
       }
     ]
   }
@@ -56,21 +55,15 @@ module "dev" {
   cluster_name = local.clusters["dev"].cluster_name
   aws_region   = var.aws_region
 
-  target_clusters = local.argocd_target_clusters["dev"]
-
-  aws_load_balancer_controller_chart_version   = var.aws_load_balancer_controller_chart_version
-  gateway_api_version                           = var.gateway_api_version
-  secrets_store_csi_driver_chart_version       = var.secrets_store_csi_driver_chart_version
-  secrets_store_csi_provider_aws_chart_version = var.secrets_store_csi_provider_aws_chart_version
-
-  repo_explorer_frontend_config_repo_url  = var.repo_explorer_frontend_config_repo_url
-  repo_explorer_frontend_config_repo_path = var.repo_explorer_frontend_config_repo_path
-  repo_explorer_backend_config_repo_url   = var.repo_explorer_backend_config_repo_url
-  repo_explorer_backend_config_repo_path  = var.repo_explorer_backend_config_repo_path
+  application_config_repo_url      = var.application_config_repo_url
+  application_config_repo_revision = var.application_config_repo_revision
+  application_config_chart_path    = var.application_config_chart_path
+  application_repositories         = local.application_repositories["dev"]
+  argocd_chart_version             = var.argocd_chart_version
 
   providers = {
     kubernetes = kubernetes.dev
-    helm = helm.dev
+    helm       = helm.dev
   }
 }
 
@@ -81,21 +74,15 @@ module "test" {
   cluster_name = local.clusters["test"].cluster_name
   aws_region   = var.aws_region
 
-  target_clusters = local.argocd_target_clusters["test"]
-
-  aws_load_balancer_controller_chart_version   = var.aws_load_balancer_controller_chart_version
-  gateway_api_version                           = var.gateway_api_version
-  secrets_store_csi_driver_chart_version       = var.secrets_store_csi_driver_chart_version
-  secrets_store_csi_provider_aws_chart_version = var.secrets_store_csi_provider_aws_chart_version
-
-  repo_explorer_frontend_config_repo_url  = var.repo_explorer_frontend_config_repo_url
-  repo_explorer_frontend_config_repo_path = var.repo_explorer_frontend_config_repo_path
-  repo_explorer_backend_config_repo_url   = var.repo_explorer_backend_config_repo_url
-  repo_explorer_backend_config_repo_path  = var.repo_explorer_backend_config_repo_path
+  application_config_repo_url      = var.application_config_repo_url
+  application_config_repo_revision = var.application_config_repo_revision
+  application_config_chart_path    = var.application_config_chart_path
+  application_repositories         = local.application_repositories["test"]
+  argocd_chart_version             = var.argocd_chart_version
 
   providers = {
     kubernetes = kubernetes.test
-    helm = helm.test
+    helm       = helm.test
   }
 }
 
@@ -106,20 +93,14 @@ module "prod" {
   cluster_name = local.clusters["prod"].cluster_name
   aws_region   = var.aws_region
 
-  target_clusters = local.argocd_target_clusters["prod"]
-
-  aws_load_balancer_controller_chart_version   = var.aws_load_balancer_controller_chart_version
-  gateway_api_version                           = var.gateway_api_version
-  secrets_store_csi_driver_chart_version       = var.secrets_store_csi_driver_chart_version
-  secrets_store_csi_provider_aws_chart_version = var.secrets_store_csi_provider_aws_chart_version
-
-  repo_explorer_frontend_config_repo_url  = var.repo_explorer_frontend_config_repo_url
-  repo_explorer_frontend_config_repo_path = var.repo_explorer_frontend_config_repo_path
-  repo_explorer_backend_config_repo_url   = var.repo_explorer_backend_config_repo_url
-  repo_explorer_backend_config_repo_path  = var.repo_explorer_backend_config_repo_path
+  application_config_repo_url      = var.application_config_repo_url
+  application_config_repo_revision = var.application_config_repo_revision
+  application_config_chart_path    = var.application_config_chart_path
+  application_repositories         = local.application_repositories["prod"]
+  argocd_chart_version             = var.argocd_chart_version
 
   providers = {
     kubernetes = kubernetes.prod
-    helm = helm.prod
+    helm       = helm.prod
   }
 }

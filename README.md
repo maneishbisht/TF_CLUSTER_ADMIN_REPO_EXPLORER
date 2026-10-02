@@ -1,169 +1,177 @@
-# EKS Cluster Admin / Argo CD ApplicationSet Terraform Project
+# CLUSTER_ADMIN_TF — Argo CD Control-Plane Bootstrap
 
-This project manages Argo CD `ApplicationSet` resources in the already-existing EKS clusters.
+This Terraform project owns the **Argo CD control-plane installation and bootstrap only** for the already-existing EKS clusters.
 
-The EKS clusters and foundational Kubernetes resources are created by the separate EKS infrastructure Terraform project.
+The separate EKS infrastructure Terraform project owns the EKS clusters and the foundational Kubernetes resources such as:
 
-## Ownership boundary
-
-The EKS infrastructure project owns:
-
-- EKS clusters
 - `repo-explorer` namespace
 - `repo-explorer-backend-sa`
 - `gateway-controller-sa`
-- Argo CD installation on `dev_cluster` and `prod_cluster`
+- EKS IAM / IRSA resources
 
-This project owns:
+The separate `REPO_EXPLORER_APPLICATION_CONFIG` Git repository owns the application manifests for:
 
-- Argo CD ApplicationSet for platform controllers
-- Argo CD ApplicationSet for repo-explorer configuration repositories
+- AWS Load Balancer Controller + Gateway API CRDs
+- AWS Secrets Store CSI Driver + AWS provider
+- Repo Explorer frontend configuration repository
+- Repo Explorer backend configuration repository
 
-This project no longer installs Argo CD itself, and it no longer installs the AWS Load Balancer Controller or Secrets Store CSI components directly with Terraform Helm releases.
+Those resources are delivered through Argo CD Applications defined by the Helm chart.
 
-## ApplicationSet design
+## Ownership after the refactor
 
-### Dev Argo CD
+### This Terraform project owns
 
-The controller ApplicationSet uses Matrix generators for:
+- Argo CD Helm installation on `dev_cluster`
+- Argo CD Helm installation on `prod_cluster`
+- Bootstrap `Application` objects in those Argo CD instances
 
-```text
-[dev_cluster, test_cluster]
-        x
-[AWS Load Balancer Controller + Gateway API/LBC CRDs,
- AWS Secrets Store CSI Driver + AWS Provider + CSI CRDs]
-```
+### The application-config Helm repository owns
 
-It therefore generates four Applications:
+- The per-cluster values files
+- Platform dependency Application manifests
+- Config-repository Application manifests
+- Application sync policies
 
-- `dev-aws-lb-controller`
-- `test-aws-lb-controller`
-- `dev-aws-secrets-store-csi`
-- `test-aws-secrets-store-csi`
+### The EKS infrastructure project owns
 
-The repo-explorer ApplicationSet uses:
+- EKS clusters
+- IAM roles / EKS access
+- The service accounts referenced by the platform charts
+- Other foundational resources required before Argo CD applications are synchronized
 
-```text
-[dev_cluster, test_cluster]
-        x
-[REPO_EXPLORER_FRONTEND_CONFIG, REPO_EXPLORER_BACKEND_CONFIG]
-```
+## Control-plane model
 
-It therefore generates four Applications as well.
+`test_cluster` does **not** run Argo CD.
 
-### Prod Argo CD
+The `dev_cluster` Argo CD instance is the control plane for both:
 
-The controller ApplicationSet uses:
+- `dev_cluster`
+- `test_cluster`
 
-```text
-[prod_cluster]
-        x
-[AWS Load Balancer Controller + Gateway API/LBC CRDs,
- AWS Secrets Store CSI Driver + AWS Provider + CSI CRDs]
-```
-
-The repo-explorer ApplicationSet uses:
+Therefore the dev Terraform module bootstraps the application-config chart twice:
 
 ```text
-[prod_cluster]
-        x
-[REPO_EXPLORER_FRONTEND_CONFIG, REPO_EXPLORER_BACKEND_CONFIG]
+dev Argo CD
+  ├── dev-application-config-dev  -> values-dev.yaml
+  └── dev-application-config-test -> values-test.yaml
+                                    |
+                                    +--> child Applications target test_cluster
 ```
 
-## Controller Applications
-
-### AWS Load Balancer Controller
-
-Each generated LBC Application has three sources:
-
-1. AWS Load Balancer Controller Helm chart `1.14.0`
-2. Standard Gateway API CRDs from Gateway API release `v1.6.0`
-
-The LBC Helm chart is allowed to install its own CRDs (including the controller-specific CRDs). This avoids managing the same LBC CRDs from a second Git source in the same Argo CD Application. AWS documentation requires the standard Gateway API CRDs plus the LBC-specific Gateway CRDs, and the LBC chart contains its CRDs for Helm installation.
-
-The Helm configuration reuses the `gateway-controller-sa` created by the EKS infrastructure project and enables the ALB/NLB Gateway API feature gates.
-
-The AWS Load Balancer Controller documentation states that the current controller supports Gateway API and requires the standard Gateway API CRDs plus the AWS-vended Gateway CRDs. It is built for Gateway API `v1.6.0`.
-
-### AWS Secrets Store CSI
-
-Each generated CSI Application has two Helm sources:
-
-1. Secrets Store CSI Driver `1.6.0`
-2. AWS Secrets Store CSI Provider `3.1.0`
-
-The CSI Driver source explicitly configures the token requests required by the AWS provider:
+The prod Argo CD instance only bootstraps:
 
 ```text
-sts.amazonaws.com
-pods.eks.amazonaws.com
+prod Argo CD
+  └── prod-application-config-prod -> values-prod.yaml
 ```
 
-The AWS provider source explicitly sets:
+The test Terraform module receives an empty application repository array, so it creates neither Argo CD nor an application-config bootstrap Application.
+
+## Terraform module repository arrays
+
+The root `main.tf` deliberately contains the environment mapping requested for this architecture:
 
 ```text
-secrets-store-csi-driver.install=false
+dev  -> [ dev(values-dev.yaml), test(values-test.yaml) ]
+test -> [ ]
+prod -> [ prod(values-prod.yaml) ]
 ```
 
-so the provider chart does not attempt to install a second copy of the CSI Driver.
+The array is not the frontend/backend config repository list. It is the list of **application-config Helm chart instances** that the local Argo CD control plane should bootstrap.
 
-## Argo CD cluster registration prerequisite
+## New application-config Helm repository
 
-The dev Argo CD ApplicationSets intentionally target both `dev_cluster` and `test_cluster`.
-
-Argo CD does **not** create target-cluster credentials merely because an ApplicationSet contains a destination. The target cluster must already be registered in the dev Argo CD instance. Register `test_cluster` with Argo CD using your approved cluster-registration process before expecting the generated test Applications to sync.
-
-The local dev cluster uses:
+The repository is expected at:
 
 ```text
-https://kubernetes.default.svc
+https://github.com/maneishbisht/REPO_EXPLORER_APPLICATION_CONFIG.git
 ```
 
-The test destination is rendered from the live EKS API endpoint discovered by Terraform.
+Change the Terraform variable / GitHub secret if the repository uses a different URL.
 
-The prod ApplicationSets only target the local prod cluster, so no cross-cluster registration is required for those generated Applications.
-
-## Repository credentials
-
-The two repo-explorer configuration repositories are public URLs in the Terraform configuration, but if access is private in your GitHub organization, register the repositories with the appropriate Argo CD instance(s) manually using the agreed `argocd repo add` process.
-
-Terraform does not inject GitHub PATs into Argo CD.
-
-The repo ApplicationSets default to the repository root (`.`) and recursively process manifests. Change the corresponding Terraform path variables when the Kubernetes manifests live under a subdirectory.
-
-## Authentication
-
-Run this project while the operator has already assumed the `cluster-admin-role` from the EKS infrastructure project.
-
-The Kubernetes provider uses:
+The chart has:
 
 ```text
-aws eks get-token
+Chart.yaml
+values.yaml
+values-dev.yaml
+values-test.yaml
+values-prod.yaml
+templates/
 ```
 
-The provider does not assume the admin role itself.
+The environment values files contain the cluster-specific values that previously lived inside Terraform ApplicationSet templates, including:
 
-## Apply order
+- EKS cluster name
+- EKS API endpoint
+- AWS region
+- platform chart versions
+- `gateway-controller-sa`
+- frontend config repository URL/path
+- backend config repository URL/path
 
-1. Apply the EKS infrastructure project.
-2. Confirm that Argo CD is running in dev and prod.
-3. Register the test EKS cluster in the dev Argo CD instance.
-4. Register the private repo credentials with the dev/prod Argo CD instances as required.
-5. Apply this project to create the ApplicationSets.
-6. Verify the generated Applications in each Argo CD instance.
+The root-admin Terraform GitHub Actions workflow is responsible for updating the EKS endpoints in those files after the EKS cluster data is available.
 
-## Versions
+## Argo CD repository credentials
 
-- AWS Load Balancer Controller Helm chart: `1.14.0`
-- Gateway API CRDs: `v1.6.0`
-- Secrets Store CSI Driver: `1.6.0`
-- AWS Secrets Store CSI Provider: `3.1.0`
+The GitHub Actions workflow for this project expects the following secrets:
 
-## References
+```text
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_SESSION_TOKEN          # only when the initial AWS identity is temporary
+CLUSTER_ADMIN_ROLE_ARN
+REPO_EXPLORER_APPLICATION_CONFIG
+REPO_EXPLORER_FRONTEND_CONFIG
+REPO_EXPLORER_BACKEND_CONFIG
+CONFIG_REPO_PAT
+```
 
-- Argo CD Matrix generator: https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Generators-Matrix/
-- Argo CD generator templates: https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Template/
-- Argo CD List generator: https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Generators-List/
-- Argo CD multiple sources: https://argo-cd.readthedocs.io/en/latest/user-guide/multiple_sources/
-- AWS Load Balancer Controller Gateway API: https://github.com/kubernetes-sigs/aws-load-balancer-controller/blob/main/docs/guide/gateway/gateway.md
-- AWS Secrets Store CSI Provider: https://github.com/aws/secrets-store-csi-driver-provider-aws/blob/main/README.md
+`REPO_EXPLORER_APPLICATION_CONFIG` is the Git URL of the new Helm chart repository.
+
+The workflow registers the new application-config repository in both dev and prod Argo CD before the bootstrap Applications are created. It also registers the existing frontend/backend configuration repositories because the child Applications in the Helm chart consume those repositories.
+
+## Apply sequence
+
+The GitHub Actions workflow intentionally uses two Terraform applies:
+
+1. `-target` installs Argo CD in dev and prod so the `argoproj.io/v1alpha1/Application` CRD exists.
+2. The workflow installs the Argo CD CLI, registers `test_cluster` with dev Argo CD, and registers the three Git repositories.
+3. A normal `terraform apply` creates the bootstrap Applications.
+4. Argo CD renders the application-config Helm chart and creates/synchronizes the child Applications.
+
+This preserves the required dependency ordering without Terraform owning the child ApplicationSets/Application manifests.
+
+## Important state isolation
+
+Keep this project's S3 backend state key separate from every other Terraform project.
+
+Current key:
+
+```text
+clusteradminrepoexplorer.tfstate
+```
+
+Do not point this project and the Root/EKS infrastructure project at the same state key. Each Terraform state file must represent one project's resource ownership.
+
+## Root-admin endpoint update
+
+The file `docs/ROOT_ADMIN_GITHUB_ACTION.md` contains the GitHub Actions step to clone the application-config repository, update `values-dev.yaml`, `values-test.yaml`, and `values-prod.yaml` with the current EKS endpoints, and commit/push only when a value changed.
+
+## Validation
+
+Before the first deployment:
+
+1. Make sure the EKS infrastructure project has completed.
+2. Make sure `gateway-controller-sa` and the other foundational service accounts exist.
+3. Make sure the new application-config repository is reachable using the PAT registered with Argo CD.
+4. Run this project's workflow.
+5. Verify the bootstrap Applications in the dev and prod Argo CD instances.
+6. Verify the generated child Applications for LBC, CSI, frontend, and backend repositories.
+
+## Migration from the previous ApplicationSet Terraform resources
+
+The previous version of this project managed `ApplicationSet` resources directly. After upgrading, Terraform will plan to remove those old resources because their declarations are no longer present. The new Helm chart creates child `Application` objects with new names to avoid an ownership collision while the old ApplicationSets are being removed.
+
+Do not manually recreate the old ApplicationSets after applying this refactor.

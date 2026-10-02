@@ -1,41 +1,17 @@
 locals {
-  target_cluster_elements = [
-    for target in var.target_clusters : {
-      clusterKey  = target.cluster_key
-      clusterName = target.cluster_name
-      server      = target.server
-    }
-  ]
-
-  repo_elements = [
-    {
-      repoKey = "frontend"
-      repoURL = var.repo_explorer_frontend_config_repo_url
-      repoPath = var.repo_explorer_frontend_config_repo_path
-    },
-    {
-      repoKey = "backend"
-      repoURL = var.repo_explorer_backend_config_repo_url
-      repoPath = var.repo_explorer_backend_config_repo_path
-    }
-  ]
-
-  create_application_sets = length(var.target_clusters) > 0
+  install_argocd = length(var.application_repositories) > 0
 }
 
-
 # =============================================================================
-# Argo CD INSTALLATION
+# 1. Argo CD INSTALLATION
 # =============================================================================
 #
-# Install Argo CD only in clusters where target_clusters is non-empty.
-# Therefore:
-#   dev  -> Argo CD installed
-#   test -> Argo CD NOT installed
-#   prod -> Argo CD installed
+# dev  -> Argo CD installed
+# test -> Argo CD NOT installed (repository array is empty)
+# prod -> Argo CD installed
 #
 resource "helm_release" "argocd" {
-  count = local.create_application_sets ? 1 : 0
+  count = local.install_argocd ? 1 : 0
 
   name             = "argocd"
   namespace        = "argocd"
@@ -43,7 +19,7 @@ resource "helm_release" "argocd" {
 
   repository = "https://argoproj.github.io/argo-helm"
   chart      = "argo-cd"
-  version = "9.1.0"
+  version    = var.argocd_chart_version
 
   timeout         = 900
   wait            = true
@@ -59,265 +35,59 @@ resource "helm_release" "argocd" {
     })
   ]
 }
+
 # =============================================================================
-# 2. Controller ApplicationSet
+# 2. Bootstrap Applications for the application-config Helm chart
 # =============================================================================
-#
-# For the dev Argo CD instance:
-#   [dev_cluster, test_cluster] x
-#   [AWS Load Balancer Controller + Gateway API/LBC CRDs,
-#    AWS Secrets Store CSI Driver + AWS Provider + CSI CRDs]
-#
-# For the prod Argo CD instance:
-#   [prod_cluster] x the same two controller types.
-#
-# The Matrix generator creates every combination of its two child generators.
-# Generator-level templates are used because the two controller Applications
-# have different multi-source definitions.
-#
-resource "kubernetes_manifest" "controllers_applicationset" {
-  count = local.create_application_sets ? 1 : 0
+
+resource "kubernetes_manifest" "application_config" {
+  for_each = {
+    for repository in var.application_repositories : repository.name => repository
+  }
 
   depends_on = [helm_release.argocd]
-
+  
   manifest = {
     apiVersion = "argoproj.io/v1alpha1"
-    kind       = "ApplicationSet"
+    kind       = "Application"
 
     metadata = {
-      name      = "${var.cluster_key}-platform-controllers"
+      name      = "${var.cluster_key}-application-config-${each.value.name}"
       namespace = "argocd"
     }
 
     spec = {
-      goTemplate = true
-      goTemplateOptions = [
-        "missingkey=error"
-      ]
+      project = "default"
 
-      generators = [
-        {
-          matrix = {
-            generators = [
-              {
-                list = {
-                  elements = local.target_cluster_elements
-                }
-              },
-              {
-                list = {
-                  elements = [
-                    {
-                      component = "aws-lb-controller"
-                    }
-                  ]
-                }
-              }
-            ]
+      source = {
+        repoURL        = var.application_config_repo_url
+        targetRevision = var.application_config_repo_revision
+        path           = var.application_config_chart_path
 
-            template = {
-              spec = {
-                sources = [
-                  {
-                    repoURL        = "https://aws.github.io/eks-charts"
-                    chart          = "aws-load-balancer-controller"
-                    targetRevision = var.aws_load_balancer_controller_chart_version
-
-                    helm = {
-                      releaseName = "aws-load-balancer-controller"
-                      skipCrds    = false
-                      values      = <<-EOT
-                        clusterName: {{.clusterName}}
-                        region: ${var.aws_region}
-                        serviceAccount:
-                          create: false
-                          name: gateway-controller-sa
-                        controllerConfig:
-                          featureGates:
-                            ALBGatewayAPI: true
-                            NLBGatewayAPI: true
-                      EOT
-                    }
-                  },
-                  {
-                    repoURL        = "https://github.com/kubernetes-sigs/gateway-api.git"
-                    targetRevision = "v${var.gateway_api_version}"
-                    path           = "config/crd/standard"
-                  },
-                ]
-              }
-            }
-          }
-        },
-        {
-          matrix = {
-            generators = [
-              {
-                list = {
-                  elements = local.target_cluster_elements
-                }
-              },
-              {
-                list = {
-                  elements = [
-                    {
-                      component = "aws-secrets-store-csi"
-                    }
-                  ]
-                }
-              }
-            ]
-
-            template = {
-              spec = {
-                sources = [
-                  {
-                    repoURL        = "https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts"
-                    chart          = "secrets-store-csi-driver"
-                    targetRevision = var.secrets_store_csi_driver_chart_version
-
-                    helm = {
-                      releaseName = "csi-secrets-store"
-                      values      = <<-EOT
-                        tokenRequests:
-                          - audience: sts.amazonaws.com
-                          - audience: pods.eks.amazonaws.com
-                      EOT
-                    }
-                  },
-                  {
-                    repoURL        = "https://aws.github.io/secrets-store-csi-driver-provider-aws"
-                    chart          = "secrets-store-csi-driver-provider-aws"
-                    targetRevision = var.secrets_store_csi_provider_aws_chart_version
-
-                    helm = {
-                      releaseName = "secrets-provider-aws"
-                      values      = <<-EOT
-                        secrets-store-csi-driver:
-                          install: false
-                      EOT
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        }
-      ]
-
-      template = {
-        metadata = {
-          name = "{{.clusterKey}}-{{.component}}"
-        }
-
-        spec = {
-          project = "default"
-
-          destination = {
-            server    = "{{.server}}"
-            namespace = "kube-system"
-          }
-
-          syncPolicy = {
-            automated = {
-              prune    = true
-              selfHeal = true
-            }
-
-            syncOptions = [
-              "ServerSideApply=true"
-            ]
-          }
+        helm = {
+          valueFiles = [
+            each.value.values_file
+          ]
         }
       }
-    }
-  }
-}
 
-# =============================================================================
-# 3. Repo-explorer ApplicationSet
-# =============================================================================
-#
-# For dev:
-#   [dev_cluster, test_cluster] x
-#   [REPO_EXPLORER_FRONTEND_CONFIG, REPO_EXPLORER_BACKEND_CONFIG]
-#
-# For prod:
-#   [prod_cluster] x the same two repositories.
-#
-resource "kubernetes_manifest" "repo_explorer_applicationset" {
-  count = local.create_application_sets ? 1 : 0
+      # The bootstrap Application itself is stored in the same cluster where
+      # Argo CD runs. Its child Applications (rendered by the chart) decide
+      # the actual workload destination from the selected values file.
+      destination = {
+        server    = "https://kubernetes.default.svc"
+        namespace = "argocd"
+      }
 
-  depends_on = [helm_release.argocd]
-
-  manifest = {
-    apiVersion = "argoproj.io/v1alpha1"
-    kind       = "ApplicationSet"
-
-    metadata = {
-      name      = "${var.cluster_key}-repo-explorer"
-      namespace = "argocd"
-    }
-
-    spec = {
-      goTemplate = true
-      goTemplateOptions = [
-        "missingkey=error"
-      ]
-
-      generators = [
-        {
-          matrix = {
-            generators = [
-              {
-                list = {
-                  elements = local.target_cluster_elements
-                }
-              },
-              {
-                list = {
-                  elements = local.repo_elements
-                }
-              }
-            ]
-          }
-        }
-      ]
-
-      template = {
-        metadata = {
-          name = "{{.clusterKey}}-repo-explorer-{{.repoKey}}"
+      syncPolicy = {
+        automated = {
+          prune    = true
+          selfHeal = true
         }
 
-        spec = {
-          project = "default"
-
-          source = {
-            repoURL        = "{{.repoURL}}"
-            targetRevision = "HEAD"
-            path           = "{{.repoPath}}"
-
-            directory = {
-              recurse = true
-            }
-          }
-
-          destination = {
-            server    = "{{.server}}"
-            namespace = "repo-explorer"
-          }
-
-          syncPolicy = {
-            automated = {
-              prune    = true
-              selfHeal = true
-            }
-
-            syncOptions = [
-              "ServerSideApply=true"
-            ]
-          }
-        }
+        syncOptions = [
+          "ServerSideApply=true"
+        ]
       }
     }
   }
