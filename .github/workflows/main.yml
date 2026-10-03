@@ -90,7 +90,30 @@ jobs:
             --kubeconfig "$KUBECONFIG"
 
           kubectl config get-contexts
+        
+      # SET THE ARGO CD NAME AS DEFAULT NAMESPACE FOR ALL THREE CONTEXTS
 
+      - name: Set Argo CD control-plane namespace for dev
+        run: |
+          set -euo pipefail
+
+          kubectl config set-context "$DEV_CLUSTER_NAME" \
+            --namespace=argocd
+
+      - name: Set Argo CD control-plane namespace for test
+        run: |
+          set -euo pipefail
+
+          kubectl config set-context "$TEST_CLUSTER_NAME" \
+            --namespace=argocd
+
+      - name: Set Argo CD control-plane namespace for prod
+        run: |
+          set -euo pipefail
+
+          kubectl config set-context "$PROD_CLUSTER_NAME" \
+            --namespace=argocd
+    
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -167,6 +190,20 @@ jobs:
           kubectl --context "$TEST_CLUSTER_NAME" get nodes
           kubectl --context "$PROD_CLUSTER_NAME" get nodes
 
+
+      - name: Verify Argo CD Control Plane Configuration
+        run: |
+          set -euo pipefail
+      
+          for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
+            kubectl --context "$cluster" \
+              --namespace argocd \
+              get configmap argocd-cm
+      
+            kubectl --context "$cluster" \
+              --namespace argocd \
+              get configmap argocd-cmd-params-cm
+          done
       # ------------------------------------------------------------
       # The dev Argo CD control plane manages test_cluster remotely.
       # ------------------------------------------------------------

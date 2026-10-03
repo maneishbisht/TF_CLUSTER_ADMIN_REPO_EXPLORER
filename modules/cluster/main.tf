@@ -25,19 +25,26 @@ resource "helm_release" "argocd" {
   wait            = true
   cleanup_on_fail = true
 
-  values = [
-    yamlencode({
-     configs = {
-        cm = {
-          create = true
-          }
+  set {
+    name  = "configs.cm.create"
+    value = "true"
+  }
 
-        params = {
-        "server.insecure" = true
-        }
-              }
-    })
-  ]
+  set {
+    name  = "configs.params.create"
+    value = "true"
+  }
+
+  set {
+    name  = "configs.rbac.create"
+    value = "true"
+  }
+
+  set {
+    name  = "configs.params.server\\.insecure"
+    value = "true"
+  }
+
 }
 
 # =============================================================================
