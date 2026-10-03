@@ -22,6 +22,55 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Verify Initial AWS Identity
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+
+      - name: Assume Cluster Admin Role
+        run: |
+          set -euo pipefail
+
+          aws sts assume-role \
+            --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
+            --role-session-name "github-actions-${GITHUB_RUN_ID}" \
+            > /tmp/cluster-admin-role.json
+
+          CREDS=$(cat /tmp/cluster-admin-role.json)
+
+          echo "AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.Credentials.AccessKeyId')" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.Credentials.SecretAccessKey')" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Credentials.SessionToken')" >> "$GITHUB_ENV"
+
+          echo "AWS identity after assuming Cluster Admin Role:"
+          aws sts get-caller-identity
+
+      - name: Create or Update EKS Kubeconfig
+        run: |
+          set -euo pipefail
+
+          rm -f "$KUBECONFIG"
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$DEV_CLUSTER_NAME" \
+            --alias "$DEV_CLUSTER_NAME" \
+            --kubeconfig "$KUBECONFIG"
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$TEST_CLUSTER_NAME" \
+            --alias "$TEST_CLUSTER_NAME" \
+            --kubeconfig "$KUBECONFIG"
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$PROD_CLUSTER_NAME" \
+            --alias "$PROD_CLUSTER_NAME" \
+            --kubeconfig "$KUBECONFIG"
+
+          kubectl config get-contexts
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
