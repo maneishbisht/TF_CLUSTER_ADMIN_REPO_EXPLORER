@@ -1,7 +1,7 @@
 name: Terraform Destroy
 
 on:
-  workflow_dispatch: # Allows manual trigger from the GitHub Actions tab
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -9,75 +9,119 @@ permissions:
 env:
   AWS_REGION: ap-south-1
 
+  DEV_CLUSTER_NAME: dev_cluster
+  TEST_CLUSTER_NAME: test_cluster
+  PROD_CLUSTER_NAME: prod_cluster
+
 jobs:
   terraform-destroy:
     name: Destroy Terraform Infrastructure
     runs-on: ubuntu-latest
 
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
     steps:
+      # ---------------------------------------------------------
+      # CHECKOUT TERRAFORM REPOSITORY
+      # ---------------------------------------------------------
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Verify Initial AWS Identity
+      # ---------------------------------------------------------
+      # CONFIGURE INITIAL AWS CREDENTIALS + ASSUME CLUSTER ADMIN
+      # ---------------------------------------------------------
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          role-to-assume: ${{ secrets.CLUSTER_ADMIN_ROLE_ARN }}
+
+          role-skip-session-tagging: true
+      # ---------------------------------------------------------
+      # VERIFY THE ASSUMED IAM ROLE
+      # ---------------------------------------------------------
+
+      - name: Verify AWS Identity
         run: |
           set -euo pipefail
+
+          echo "AWS identity being used:"
           aws sts get-caller-identity
 
-      - name: Assume Cluster Admin Role
+      # ---------------------------------------------------------
+      # VERIFY ACCESS TO ALL THREE EKS CLUSTERS
+      #
+      # This does NOT create kubeconfig.
+      # It simply verifies that the assumed role can access
+      # the EKS control planes.
+      # ---------------------------------------------------------
+
+      - name: Verify EKS Access
         run: |
           set -euo pipefail
 
-          aws sts assume-role \
-            --role-arn "$CLUSTER_ADMIN_ROLE_ARN" \
-            --role-session-name "github-actions-${GITHUB_RUN_ID}" \
-            > /tmp/cluster-admin-role.json
-
-          CREDS=$(cat /tmp/cluster-admin-role.json)
-
-          echo "AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.Credentials.AccessKeyId')" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.Credentials.SecretAccessKey')" >> "$GITHUB_ENV"
-          echo "AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Credentials.SessionToken')" >> "$GITHUB_ENV"
-
-          echo "AWS identity after assuming Cluster Admin Role:"
-          aws sts get-caller-identity
-
-      - name: Create or Update EKS Kubeconfig
-        run: |
-          set -euo pipefail
-
-          rm -f "$KUBECONFIG"
-
-          aws eks update-kubeconfig \
+          echo "Checking DEV cluster..."
+          aws eks describe-cluster \
             --region "$AWS_REGION" \
             --name "$DEV_CLUSTER_NAME" \
-            --alias "$DEV_CLUSTER_NAME" \
-            --kubeconfig "$KUBECONFIG"
+            --query 'cluster.name' \
+            --output text
 
-          aws eks update-kubeconfig \
+          echo "Checking TEST cluster..."
+          aws eks describe-cluster \
             --region "$AWS_REGION" \
             --name "$TEST_CLUSTER_NAME" \
-            --alias "$TEST_CLUSTER_NAME" \
-            --kubeconfig "$KUBECONFIG"
+            --query 'cluster.name' \
+            --output text
 
-          aws eks update-kubeconfig \
+          echo "Checking PROD cluster..."
+          aws eks describe-cluster \
             --region "$AWS_REGION" \
             --name "$PROD_CLUSTER_NAME" \
-            --alias "$PROD_CLUSTER_NAME" \
-            --kubeconfig "$KUBECONFIG"
+            --query 'cluster.name' \
+            --output text
 
-          kubectl config get-contexts
+      # ---------------------------------------------------------
+      # SETUP TERRAFORM
+      # ---------------------------------------------------------
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.0
 
+      # ---------------------------------------------------------
+      # INITIALIZE TERRAFORM
+      # ---------------------------------------------------------
+
       - name: Terraform Init
-        run: terraform init
+        run: |
+          set -euo pipefail
+
+          terraform init -input=false
+
+      # ---------------------------------------------------------
+      # OPTIONAL VALIDATION
+      # ---------------------------------------------------------
+
+      - name: Terraform Validate
+        run: |
+          set -euo pipefail
+
+          terraform validate
+
+      # ---------------------------------------------------------
+      # DESTROY EVERYTHING MANAGED BY THIS TERRAFORM STATE
+      # ---------------------------------------------------------
 
       - name: Terraform Destroy
-        run: terraform destroy -auto-approve
+        run: |
+          set -euo pipefail
+
+          terraform destroy \
+            -input=false \
+            -auto-approve
