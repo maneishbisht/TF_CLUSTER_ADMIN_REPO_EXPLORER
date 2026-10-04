@@ -5,6 +5,8 @@ on:
     branches:
       - master
 
+  workflow_dispatch:
+
 permissions:
   contents: read
 
@@ -23,7 +25,7 @@ env:
 
 jobs:
   terraform-and-argocd:
-    name: Terraform + Argo CD Bootstrap   
+    name: Terraform + Argo CD Bootstrap
     runs-on: ubuntu-latest
 
     env:
@@ -39,14 +41,28 @@ jobs:
       CONFIG_REPO_PAT: ${{ secrets.CONFIG_REPO_PAT }}
 
     steps:
+
+      # ============================================================
+      # 1. Checkout Terraform Repository
+      # ============================================================
       - name: Checkout Terraform Repository
         uses: actions/checkout@v4
+        with:
+          ref: master
 
+
+      # ============================================================
+      # 2. Verify Initial AWS Identity
+      # ============================================================
       - name: Verify Initial AWS Identity
         run: |
           set -euo pipefail
           aws sts get-caller-identity
 
+
+      # ============================================================
+      # 3. Assume Cluster Admin Role
+      # ============================================================
       - name: Assume Cluster Admin Role
         run: |
           set -euo pipefail
@@ -65,6 +81,10 @@ jobs:
           echo "AWS identity after assuming Cluster Admin Role:"
           aws sts get-caller-identity
 
+
+      # ============================================================
+      # 4. Create or Update EKS Kubeconfig
+      # ============================================================
       - name: Create or Update EKS Kubeconfig
         run: |
           set -euo pipefail
@@ -90,9 +110,11 @@ jobs:
             --kubeconfig "$KUBECONFIG"
 
           kubectl config get-contexts
-        
-      # SET THE ARGO CD NAME AS DEFAULT NAMESPACE FOR ALL THREE CONTEXTS
 
+
+      # ============================================================
+      # 5. Set Argo CD control-plane namespace for dev
+      # ============================================================
       - name: Set Argo CD control-plane namespace for dev
         run: |
           set -euo pipefail
@@ -100,6 +122,10 @@ jobs:
           kubectl config set-context "$DEV_CLUSTER_NAME" \
             --namespace=argocd
 
+
+      # ============================================================
+      # 6. Set Argo CD control-plane namespace for test
+      # ============================================================
       - name: Set Argo CD control-plane namespace for test
         run: |
           set -euo pipefail
@@ -107,23 +133,40 @@ jobs:
           kubectl config set-context "$TEST_CLUSTER_NAME" \
             --namespace=argocd
 
+
+      # ============================================================
+      # 7. Set Argo CD control-plane namespace for prod
+      # ============================================================
       - name: Set Argo CD control-plane namespace for prod
         run: |
           set -euo pipefail
 
           kubectl config set-context "$PROD_CLUSTER_NAME" \
             --namespace=argocd
-    
+
+
+      # ============================================================
+      # 8. Setup Terraform
+      # ============================================================
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.0
 
+
+      # ============================================================
+      # 9. Terraform Init
+      # ============================================================
       - name: Terraform Init
         run: terraform init
 
+
+      # ============================================================
+      # 10. Terraform Validate
+      # ============================================================
       - name: Terraform Validate
         run: terraform validate
+
 
       # ------------------------------------------------------------
       # First stage: only create Argo CD itself.
@@ -134,27 +177,28 @@ jobs:
       - name: Cleanup Existing ArgoCD Releases and Namespaces
         run: |
           set -e
-    
+
           for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
             echo "Cleaning up ArgoCD remnants on cluster: $cluster"
-            
+
             # 1. Delete Helm release tracking secrets and configmaps if they exist
             kubectl --context "$cluster" delete secret -n argocd -l owner=helm --ignore-not-found=true
             kubectl --context "$cluster" delete configmap -n argocd -l owner=helm --ignore-not-found=true
-            
+
             # 2. Force delete the namespace if it exists
             if kubectl --context "$cluster" get namespace argocd >/dev/null 2>&1; then
               echo "Deleting 'argocd' namespace on $cluster..."
               kubectl --context "$cluster" delete namespace argocd --wait=true
             fi
-    
+
             # 3. Clean up cluster-scoped ArgoCD CRDs that might block re-installation
             echo "Checking for leftover ArgoCD CRDs on $cluster..."
             kubectl --context "$cluster" get crd -o name | grep argoproj.io | xargs -r kubectl --context "$cluster" delete --wait=true || true
           done
-    
+
           echo "Waiting 10 seconds for cluster state to settle..."
           sleep 10
+
 
       - name: Install Argo CD on Dev and Prod
         run: |
@@ -165,8 +209,23 @@ jobs:
             -target=module.prod.helm_release.argocd[0] \
             -auto-approve
 
+      - name: Diagnose Argo CD Installation
+        if: failure()
+        run: |
+          set +e
+
+          echo "===== DEV ARGO CD ====="
+          kubectl --context "$DEV_CLUSTER_NAME" -n argocd get pods -o wide
+          kubectl --context "$DEV_CLUSTER_NAME" -n argocd get events --sort-by='.lastTimestamp'
+
+          echo ""
+          echo "===== PROD ARGO CD ====="
+          kubectl --context "$PROD_CLUSTER_NAME" -n argocd get pods -o wide
+          kubectl --context "$PROD_CLUSTER_NAME" -n argocd get events --sort-by='.lastTimestamp'
+
       - name: Wait for CRDs to Register
         run: sleep 30
+
 
       - name: Install Argo CD CLI
         run: |
@@ -194,19 +253,22 @@ jobs:
       - name: Verify Argo CD Control Plane Configuration
         run: |
           set -euo pipefail
-      
+
           for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
             kubectl --context "$cluster" \
               --namespace argocd \
               get configmap argocd-cm
-      
+
             kubectl --context "$cluster" \
               --namespace argocd \
               get configmap argocd-cmd-params-cm
           done
+
+
       # ------------------------------------------------------------
       # The dev Argo CD control plane manages test_cluster remotely.
       # ------------------------------------------------------------
+
       - name: Register Test Cluster in Dev Argo CD
         run: |
           set -euo pipefail
@@ -217,10 +279,12 @@ jobs:
             --upsert \
             --yes
 
+
       # ------------------------------------------------------------
       # Register all Git repositories required by the bootstrap
       # Applications and their child Applications.
       # ------------------------------------------------------------
+
       - name: Add Application Config Repository to Dev Argo CD
         run: |
           set -euo pipefail
@@ -231,6 +295,7 @@ jobs:
             --username "x-access-token" \
             --password "$CONFIG_REPO_PAT" \
             --upsert
+
 
       - name: Add Frontend Config Repository to Dev Argo CD
         run: |
@@ -243,6 +308,7 @@ jobs:
             --password "$CONFIG_REPO_PAT" \
             --upsert
 
+
       - name: Add Backend Config Repository to Dev Argo CD
         run: |
           set -euo pipefail
@@ -253,6 +319,7 @@ jobs:
             --username "x-access-token" \
             --password "$CONFIG_REPO_PAT" \
             --upsert
+
 
       - name: Add Application Config Repository to Prod Argo CD
         run: |
@@ -265,6 +332,7 @@ jobs:
             --password "$CONFIG_REPO_PAT" \
             --upsert
 
+
       - name: Add Frontend Config Repository to Prod Argo CD
         run: |
           set -euo pipefail
@@ -275,6 +343,7 @@ jobs:
             --username "x-access-token" \
             --password "$CONFIG_REPO_PAT" \
             --upsert
+
 
       - name: Add Backend Config Repository to Prod Argo CD
         run: |
@@ -287,15 +356,18 @@ jobs:
             --password "$CONFIG_REPO_PAT" \
             --upsert
 
+
       # ------------------------------------------------------------
       # Second stage: create the Terraform-owned bootstrap
       # Applications only. The Helm chart then owns all child
       # Application manifests.
       # ------------------------------------------------------------
+
       - name: Terraform Apply Bootstrap Applications
         run: |
           set -euo pipefail
           terraform apply -auto-approve
+
 
       - name: Verify Dev Argo CD
         run: |
@@ -315,6 +387,7 @@ jobs:
           argocd app list \
             --core \
             --kube-context "$DEV_CLUSTER_NAME"
+
 
       - name: Verify Prod Argo CD
         run: |
