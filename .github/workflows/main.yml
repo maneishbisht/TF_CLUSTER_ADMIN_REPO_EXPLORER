@@ -1,3 +1,4 @@
+
 name: Terraform Apply & Configure Argo CD
 
 on:
@@ -15,7 +16,7 @@ env:
 
   DEV_CLUSTER_NAME: dev_cluster
   TEST_CLUSTER_NAME: test_cluster
-  PROD_CLUSTER_NAME: prod_cluster
+  # PROD_CLUSTER_NAME: prod_cluster
 
   KUBECONFIG: ${{ github.workspace }}/kubeconfig
 
@@ -57,6 +58,7 @@ jobs:
       - name: Verify Initial AWS Identity
         run: |
           set -euo pipefail
+
           aws sts get-caller-identity
 
 
@@ -103,11 +105,14 @@ jobs:
             --alias "$TEST_CLUSTER_NAME" \
             --kubeconfig "$KUBECONFIG"
 
-          aws eks update-kubeconfig \
-            --region "$AWS_REGION" \
-            --name "$PROD_CLUSTER_NAME" \
-            --alias "$PROD_CLUSTER_NAME" \
-            --kubeconfig "$KUBECONFIG"
+          # PROD CLUSTER - currently disabled.
+          # Uncomment the complete command below when prod is required.
+          #
+          # aws eks update-kubeconfig \
+          #   --region "$AWS_REGION" \
+          #   --name "$PROD_CLUSTER_NAME" \
+          #   --alias "$PROD_CLUSTER_NAME" \
+          #   --kubeconfig "$KUBECONFIG"
 
           kubectl config get-contexts
 
@@ -137,12 +142,15 @@ jobs:
       # ============================================================
       # 7. Set Argo CD control-plane namespace for prod
       # ============================================================
-      - name: Set Argo CD control-plane namespace for prod
-        run: |
-          set -euo pipefail
-
-          kubectl config set-context "$PROD_CLUSTER_NAME" \
-            --namespace=argocd
+      # PROD CLUSTER - currently disabled.
+      # Uncomment the complete step below when prod is required.
+      #
+      # - name: Set Argo CD control-plane namespace for prod
+      #   run: |
+      #     set -euo pipefail
+      #
+      #     kubectl config set-context "$PROD_CLUSTER_NAME" \
+      #       --namespace=argocd
 
 
       # ============================================================
@@ -174,11 +182,20 @@ jobs:
       # bootstrap Application manifests in stage two.
       # ------------------------------------------------------------
 
+      # ============================================================
+      # 11. Cleanup Existing ArgoCD Releases and Namespaces
+      # ============================================================
       - name: Cleanup Existing ArgoCD Releases and Namespaces
         run: |
           set -e
 
-          for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
+          # PROD CLUSTER - currently disabled.
+          # To clean both dev and prod later, replace the active
+          # loop below with the commented loop.
+          #
+          # for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
+
+          for cluster in "$DEV_CLUSTER_NAME"; do
             echo "Cleaning up ArgoCD remnants on cluster: $cluster"
 
             # 1. Delete Helm release tracking secrets and configmaps if they exist
@@ -200,15 +217,28 @@ jobs:
           sleep 10
 
 
+      # ============================================================
+      # 12. Install Argo CD on Dev and Prod
+      # ============================================================
       - name: Install Argo CD on Dev and Prod
         run: |
           set -euo pipefail
 
           terraform apply \
             -target=module.dev.helm_release.argocd[0] \
-            -target=module.prod.helm_release.argocd[0] \
             -auto-approve
 
+          # PROD CLUSTER - currently disabled.
+          # Uncomment the following target when prod is required.
+          #
+          # terraform apply \
+          #   -target=module.prod.helm_release.argocd[0] \
+          #   -auto-approve
+
+
+      # ============================================================
+      # 13. Diagnose Argo CD Installation
+      # ============================================================
       - name: Diagnose Argo CD Installation
         if: failure()
         run: |
@@ -218,15 +248,25 @@ jobs:
           kubectl --context "$DEV_CLUSTER_NAME" -n argocd get pods -o wide
           kubectl --context "$DEV_CLUSTER_NAME" -n argocd get events --sort-by='.lastTimestamp'
 
-          echo ""
-          echo "===== PROD ARGO CD ====="
-          kubectl --context "$PROD_CLUSTER_NAME" -n argocd get pods -o wide
-          kubectl --context "$PROD_CLUSTER_NAME" -n argocd get events --sort-by='.lastTimestamp'
+          # PROD CLUSTER - currently disabled.
+          # Uncomment the following commands when prod is required.
+          #
+          # echo ""
+          # echo "===== PROD ARGO CD ====="
+          # kubectl --context "$PROD_CLUSTER_NAME" -n argocd get pods -o wide
+          # kubectl --context "$PROD_CLUSTER_NAME" -n argocd get events --sort-by='.lastTimestamp'
 
+
+      # ============================================================
+      # 14. Wait for CRDs to Register
+      # ============================================================
       - name: Wait for CRDs to Register
         run: sleep 30
 
 
+      # ============================================================
+      # 15. Install Argo CD CLI
+      # ============================================================
       - name: Install Argo CD CLI
         run: |
           set -euo pipefail
@@ -241,20 +281,36 @@ jobs:
           argocd version --client
 
 
+      # ============================================================
+      # 16. Verify EKS Cluster Access
+      # ============================================================
       - name: Verify EKS Cluster Access
         run: |
           set -euo pipefail
 
           kubectl --context "$DEV_CLUSTER_NAME" get nodes
           kubectl --context "$TEST_CLUSTER_NAME" get nodes
-          kubectl --context "$PROD_CLUSTER_NAME" get nodes
+
+          # PROD CLUSTER - currently disabled.
+          # Uncomment when prod is required.
+          #
+          # kubectl --context "$PROD_CLUSTER_NAME" get nodes
 
 
+      # ============================================================
+      # 17. Verify Argo CD Control Plane Configuration
+      # ============================================================
       - name: Verify Argo CD Control Plane Configuration
         run: |
           set -euo pipefail
 
-          for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
+          # PROD CLUSTER - currently disabled.
+          # To verify both dev and prod later, replace the active
+          # loop below with the commented loop.
+          #
+          # for cluster in "$DEV_CLUSTER_NAME" "$PROD_CLUSTER_NAME"; do
+
+          for cluster in "$DEV_CLUSTER_NAME"; do
             kubectl --context "$cluster" \
               --namespace argocd \
               get configmap argocd-cm
@@ -269,6 +325,9 @@ jobs:
       # The dev Argo CD control plane manages test_cluster remotely.
       # ------------------------------------------------------------
 
+      # ============================================================
+      # 18. Register Test Cluster in Dev Argo CD
+      # ============================================================
       - name: Register Test Cluster in Dev Argo CD
         run: |
           set -euo pipefail
@@ -285,6 +344,9 @@ jobs:
       # Applications and their child Applications.
       # ------------------------------------------------------------
 
+      # ============================================================
+      # 19. Add Application Config Repository to Dev Argo CD
+      # ============================================================
       - name: Add Application Config Repository to Dev Argo CD
         run: |
           set -euo pipefail
@@ -297,6 +359,9 @@ jobs:
             --upsert
 
 
+      # ============================================================
+      # 20. Add Frontend Config Repository to Dev Argo CD
+      # ============================================================
       - name: Add Frontend Config Repository to Dev Argo CD
         run: |
           set -euo pipefail
@@ -309,6 +374,9 @@ jobs:
             --upsert
 
 
+      # ============================================================
+      # 21. Add Backend Config Repository to Dev Argo CD
+      # ============================================================
       - name: Add Backend Config Repository to Dev Argo CD
         run: |
           set -euo pipefail
@@ -321,40 +389,58 @@ jobs:
             --upsert
 
 
-      - name: Add Application Config Repository to Prod Argo CD
-        run: |
-          set -euo pipefail
-
-          argocd repo add "$APPLICATION_CONFIG_REPO" \
-            --core \
-            --kube-context "$PROD_CLUSTER_NAME" \
-            --username "x-access-token" \
-            --password "$CONFIG_REPO_PAT" \
-            --upsert
-
-
-      - name: Add Frontend Config Repository to Prod Argo CD
-        run: |
-          set -euo pipefail
-
-          argocd repo add "$FRONTEND_REPO" \
-            --core \
-            --kube-context "$PROD_CLUSTER_NAME" \
-            --username "x-access-token" \
-            --password "$CONFIG_REPO_PAT" \
-            --upsert
+      # ============================================================
+      # 22. Add Application Config Repository to Prod Argo CD
+      # ============================================================
+      # PROD CLUSTER - currently disabled.
+      # Uncomment the complete step below when prod is required.
+      #
+      # - name: Add Application Config Repository to Prod Argo CD
+      #   run: |
+      #     set -euo pipefail
+      #
+      #     argocd repo add "$APPLICATION_CONFIG_REPO" \
+      #       --core \
+      #       --kube-context "$PROD_CLUSTER_NAME" \
+      #       --username "x-access-token" \
+      #       --password "$CONFIG_REPO_PAT" \
+      #       --upsert
 
 
-      - name: Add Backend Config Repository to Prod Argo CD
-        run: |
-          set -euo pipefail
+      # ============================================================
+      # 23. Add Frontend Config Repository to Prod Argo CD
+      # ============================================================
+      # PROD CLUSTER - currently disabled.
+      # Uncomment the complete step below when prod is required.
+      #
+      # - name: Add Frontend Config Repository to Prod Argo CD
+      #   run: |
+      #     set -euo pipefail
+      #
+      #     argocd repo add "$FRONTEND_REPO" \
+      #       --core \
+      #       --kube-context "$PROD_CLUSTER_NAME" \
+      #       --username "x-access-token" \
+      #       --password "$CONFIG_REPO_PAT" \
+      #       --upsert
 
-          argocd repo add "$BACKEND_REPO" \
-            --core \
-            --kube-context "$PROD_CLUSTER_NAME" \
-            --username "x-access-token" \
-            --password "$CONFIG_REPO_PAT" \
-            --upsert
+
+      # ============================================================
+      # 24. Add Backend Config Repository to Prod Argo CD
+      # ============================================================
+      # PROD CLUSTER - currently disabled.
+      # Uncomment the complete step below when prod is required.
+      #
+      # - name: Add Backend Config Repository to Prod Argo CD
+      #   run: |
+      #     set -euo pipefail
+      #
+      #     argocd repo add "$BACKEND_REPO" \
+      #       --core \
+      #       --kube-context "$PROD_CLUSTER_NAME" \
+      #       --username "x-access-token" \
+      #       --password "$CONFIG_REPO_PAT" \
+      #       --upsert
 
 
       # ------------------------------------------------------------
@@ -363,12 +449,19 @@ jobs:
       # Application manifests.
       # ------------------------------------------------------------
 
+      # ============================================================
+      # 25. Terraform Apply Bootstrap Applications
+      # ============================================================
       - name: Terraform Apply Bootstrap Applications
         run: |
           set -euo pipefail
+
           terraform apply -auto-approve
 
 
+      # ============================================================
+      # 26. Verify Dev Argo CD
+      # ============================================================
       - name: Verify Dev Argo CD
         run: |
           set -euo pipefail
@@ -389,21 +482,27 @@ jobs:
             --kube-context "$DEV_CLUSTER_NAME"
 
 
-      - name: Verify Prod Argo CD
-        run: |
-          set -euo pipefail
-
-          echo "===== Prod Argo CD Clusters ====="
-          argocd cluster list \
-            --core \
-            --kube-context "$PROD_CLUSTER_NAME"
-
-          echo "===== Prod Argo CD Repositories ====="
-          argocd repo list \
-            --core \
-            --kube-context "$PROD_CLUSTER_NAME"
-
-          echo "===== Prod Argo CD Applications ====="
-          argocd app list \
-            --core \
-            --kube-context "$PROD_CLUSTER_NAME"
+      # ============================================================
+      # 27. Verify Prod Argo CD
+      # ============================================================
+      # PROD CLUSTER - currently disabled.
+      # Uncomment the complete step below when prod is required.
+      #
+      # - name: Verify Prod Argo CD
+      #   run: |
+      #     set -euo pipefail
+      #
+      #     echo "===== Prod Argo CD Clusters ====="
+      #     argocd cluster list \
+      #       --core \
+      #       --kube-context "$PROD_CLUSTER_NAME"
+      #
+      #     echo "===== Prod Argo CD Repositories ====="
+      #     argocd repo list \
+      #       --core \
+      #       --kube-context "$PROD_CLUSTER_NAME"
+      #
+      #     echo "===== Prod Argo CD Applications ====="
+      #     argocd app list \
+      #       --core \
+      #       --kube-context "$PROD_CLUSTER_NAME"

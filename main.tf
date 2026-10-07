@@ -8,9 +8,9 @@ locals {
       cluster_name = "test_cluster"
     }
 
-    prod = {
-      cluster_name = "prod_cluster"
-    }
+    #prod = {
+    #  cluster_name = "prod_cluster"
+    #}
   }
 
   # Argo CD is installed only on dev and prod.
@@ -32,12 +32,12 @@ locals {
 
     test = []
 
-    prod = [
-      {
-        name        = "prod"
-        values_file = "values-prod.yaml"
-      }
-    ]
+    #prod = [
+    #  {
+    #    name        = "prod"
+    #    values_file = "values-prod.yaml"
+    #  }
+    #]
   }
 }
 
@@ -86,21 +86,21 @@ module "test" {
   }
 }
 
-module "prod" {
-  source = "./modules/cluster"
-
-  cluster_key  = "prod"
-  cluster_name = local.clusters["prod"].cluster_name
-  aws_region   = var.aws_region
-
-  application_config_repo_url      = var.application_config_repo_url
-  application_config_repo_revision = var.application_config_repo_revision
-  application_config_chart_path    = var.application_config_chart_path
-  application_repositories         = local.application_repositories["prod"]
-  argocd_chart_version             = var.argocd_chart_version
-
-  providers = {
-    kubernetes = kubernetes.prod
-    helm       = helm.prod
-  }
-}
+#module "prod" {
+#  source = "./modules/cluster"
+#
+#  cluster_key  = "prod"
+#  cluster_name = local.clusters["prod"].cluster_name
+#  aws_region   = var.aws_region
+#
+#  application_config_repo_url      = var.application_config_repo_url
+#  application_config_repo_revision = var.application_config_repo_revision
+#  application_config_chart_path    = var.application_config_chart_path
+#  application_repositories         = local.application_repositories["prod"]
+#  argocd_chart_version             = var.argocd_chart_version
+#
+#  providers = {
+#    kubernetes = kubernetes.prod
+#    helm       = helm.prod
+#  }
+#}

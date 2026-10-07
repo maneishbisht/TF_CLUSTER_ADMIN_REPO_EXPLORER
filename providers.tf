@@ -45,25 +45,25 @@ provider "kubernetes" {
   }
 }
 
-provider "kubernetes" {
-  alias = "prod"
-
-  host                   = data.aws_eks_cluster.clusters["prod"].endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.clusters["prod"].certificate_authority[0].data)
-
-  exec {
-    api_version = "client.authentication.k8s.io/v1"
-    command     = "aws"
-    args = [
-      "eks",
-      "get-token",
-      "--region",
-      var.aws_region,
-      "--cluster-name",
-      local.clusters["prod"].cluster_name,
-    ]
-  }
-}
+#provider "kubernetes" {
+#  alias = "prod"
+#
+#  host                   = data.aws_eks_cluster.clusters["prod"].endpoint
+#  cluster_ca_certificate = base64decode(data.aws_eks_cluster.clusters["prod"].certificate_authority[0].data)
+#
+#  exec {
+#    api_version = "client.authentication.k8s.io/v1"
+#    command     = "aws"
+#    args = [
+#      "eks",
+#      "get-token",
+#      "--region",
+#      var.aws_region,
+#      "--cluster-name",
+#      local.clusters["prod"].cluster_name,
+#    ]
+#  }
+#}
 
 provider "helm" {
   alias = "dev"
@@ -109,24 +109,24 @@ provider "helm" {
   }
 }
 
-provider "helm" {
-  alias = "prod"
-
-  kubernetes {
-    host                   = data.aws_eks_cluster.clusters["prod"].endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.clusters["prod"].certificate_authority[0].data)
-
-    exec {
-      api_version = "client.authentication.k8s.io/v1"
-      command     = "aws"
-      args = [
-        "eks",
-        "get-token",
-        "--cluster-name",
-        local.clusters["prod"].cluster_name,
-        "--region",
-        var.aws_region
-      ]
-    }
-  }
-}
+#provider "helm" {
+#  alias = "prod"
+#
+#  kubernetes {
+#    host                   = data.aws_eks_cluster.clusters["prod"].endpoint
+#    cluster_ca_certificate = base64decode(data.aws_eks_cluster.clusters["prod"].certificate_authority[0].data)
+#
+#    exec {
+#      api_version = "client.authentication.k8s.io/v1"
+#      command     = "aws"
+#      args = [
+#        "eks",
+#        "get-token",
+#        "--cluster-name",
+#        local.clusters["prod"].cluster_name,
+#        "--region",
+#        var.aws_region
+#      ]
+#    }
+#  }
+#}

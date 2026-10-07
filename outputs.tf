@@ -7,6 +7,7 @@ output "cluster_names" {
 
 output "argocd_installed_clusters" {
   description = "Clusters where this project installs Argo CD."
+  # value       = ["dev", "prod"]
   value       = ["dev", "prod"]
 }
 
